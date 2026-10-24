@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>bundleid</key>
+	<string>com.iali.tldrpages</string>
+	<key>connections</key>
+	<dict>
+		<key>363759D0-AF5A-4207-9A03-F9B2CF12829F</key>
+		<array/>
+		<key>DFF1BAF4-1C88-475D-A59B-05EE580E2BBD</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>363759D0-AF5A-4207-9A03-F9B2CF12829F</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
+	</dict>
+	<key>createdby</key>
+	<string>iAli</string>
+	<key>description</key>
+	<string>Look up tldr-pages cheatsheets with Alfred</string>
+	<key>disabled</key>
+	<false/>
+	<key>name</key>
+	<string>TLDR Pages</string>
+	<key>objects</key>
+	<array>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>behaviour</key>
+				<integer>2</integer>
+				<key>fontmode</key>
+				<integer>0</integer>
+				<key>fontsizing</key>
+				<integer>0</integer>
+				<key>footertext</key>
+				<string></string>
+				<key>inputfile</key>
+				<string></string>
+				<key>inputtype</key>
+				<integer>2</integer>
+				<key>loadingtext</key>
+				<string></string>
+				<key>outputmode</key>
+				<integer>0</integer>
+				<key>scriptinput</key>
+				<integer>0</integer>
+				<key>spellchecking</key>
+				<integer>0</integer>
+				<key>stackview</key>
+				<true/>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.userinterface.text</string>
+			<key>uid</key>
+			<string>363759D0-AF5A-4207-9A03-F9B2CF12829F</string>
+			<key>version</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>alfredfiltersresults</key>
+				<true/>
+				<key>alfredfiltersresultsmatchmode</key>
+				<integer>0</integer>
+				<key>argumenttreatemptyqueryasnil</key>
+				<true/>
+				<key>argumenttrimmode</key>
+				<integer>0</integer>
+				<key>argumenttype</key>
+				<integer>1</integer>
+				<key>escaping</key>
+				<integer>68</integer>
+				<key>keyword</key>
+				<string>{var:keyword}</string>
+				<key>queuedelaycustom</key>
+				<integer>3</integer>
+				<key>queuedelayimmediatelyinitially</key>
+				<true/>
+				<key>queuedelaymode</key>
+				<integer>0</integer>
+				<key>queuemode</key>
+				<integer>1</integer>
+				<key>runningsubtext</key>
+				<string></string>
+				<key>script</key>
+				<string>#!/usr/bin/env python3
+"""Alfred Script Filter: list local TLDR pages and launch a weekly refresh."""
+
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+# Keep this aligned with the original workflow, which uses ./pages.
+workflow_dir = Path.cwd().resolve()
+pages_dir = workflow_dir / "pages"
+updater = workflow_dir / "update_pages.py"
+success_marker = workflow_dir / ".tldr-pages-last-success"
+attempt_marker = workflow_dir / ".tldr-pages-last-attempt"
+lock_path = workflow_dir / ".tldr-pages-update.lock"
+
+WEEK_SECONDS = 7 * 24 * 60 * 60
+RETRY_SECONDS = 24 * 60 * 60
+STALE_LOCK_SECONDS = 60 * 60
+
+
+def read_timestamp(path: Path) -&gt; float:
+    try:
+        return float(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
+def maybe_start_update() -&gt; None:
+    now = time.time()
+    if not updater.is_file():
+        return
+    if now - read_timestamp(success_marker) &lt; WEEK_SECONDS:
+        return
+    if now - read_timestamp(attempt_marker) &lt; RETRY_SECONDS:
+        return
+
+    # Clear a stale lock left behind by an interrupted updater.
+    try:
+        if lock_path.exists() and now - lock_path.stat().st_mtime &gt; STALE_LOCK_SECONDS:
+            lock_path.unlink()
+    except OSError:
+        pass
+
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+    except FileExistsError:
+        return
+    except OSError:
+        return
+
+    try:
+        attempt_marker.write_text(str(now), encoding="utf-8")
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(updater),
+                str(pages_dir),
+                str(success_marker),
+                str(lock_path),
+            ],
+            cwd=str(workflow_dir),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        lock_path.unlink(missing_ok=True)
+
+
+maybe_start_update()
+
+# Return cached results immediately; never wait for the network download.
+items = []
+if pages_dir.is_dir():
+    for platform in sorted(pages_dir.iterdir()):
+        if not platform.is_dir():
+            continue
+        for page_file in sorted(platform.glob("*.md")):
+            items.append(
+                {
+                    "title": page_file.stem.replace("-", " "),
+                    "subtitle": platform.name,
+                    "arg": str(page_file.resolve()),
+                }
+            )
+
+print(json.dumps({"items": items}, ensure_ascii=False))
+</string>
+				<key>scriptargtype</key>
+				<integer>1</integer>
+				<key>scriptfile</key>
+				<string></string>
+				<key>subtext</key>
+				<string>Look up tldr-pages cheatsheets</string>
+				<key>title</key>
+				<string>TLDR Pages</string>
+				<key>type</key>
+				<integer>9</integer>
+				<key>withspace</key>
+				<true/>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.input.scriptfilter</string>
+			<key>uid</key>
+			<string>DFF1BAF4-1C88-475D-A59B-05EE580E2BBD</string>
+			<key>version</key>
+			<integer>3</integer>
+		</dict>
+	</array>
+	<key>readme</key>
+	<string>## TLDR Pages
+
+Look up tldr-pages cheatsheets via the `tldr` keyword.
+
+---
+
+⭐ If you find it useful, give it a [star on GitHub](https://github.com/iAli/tldr-pages-workflow)</string>
+	<key>uidata</key>
+	<dict>
+		<key>363759D0-AF5A-4207-9A03-F9B2CF12829F</key>
+		<dict>
+			<key>xpos</key>
+			<real>285</real>
+			<key>ypos</key>
+			<real>25</real>
+		</dict>
+		<key>DFF1BAF4-1C88-475D-A59B-05EE580E2BBD</key>
+		<dict>
+			<key>xpos</key>
+			<real>65</real>
+			<key>ypos</key>
+			<real>25</real>
+		</dict>
+	</dict>
+	<key>userconfigurationconfig</key>
+	<array>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>tldr</string>
+				<key>placeholder</key>
+				<string>tldr</string>
+				<key>required</key>
+				<false/>
+				<key>trim</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string></string>
+			<key>label</key>
+			<string>Keyword</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>keyword</string>
+		</dict>
+	</array>
+	<key>variablesdontexport</key>
+	<array/>
+	<key>version</key>
+	<string>26.1</string>
+	<key>webaddress</key>
+	<string>https://github.com/iAli/tldr-pages-workflow</string>
+</dict>
+</plist>
